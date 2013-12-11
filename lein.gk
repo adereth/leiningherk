@@ -1,0 +1,159 @@
+(load-file "core")
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Basic utility functions ;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(def re-matches?
+  (fn (re s)
+    (sh! (str "[[ '" s "' =~ " re " ]]"))))
+
+(def dissoc
+  (fn (alist k)
+    (filter (fn (p) (not (eq? k (car p)))) alist)))
+
+(def assoc
+  (fn (alist k v)
+    (cons (list k v)
+          (dissoc alist k))))
+
+(def get
+  (fn (alist k & default)
+    (if alist
+      (if (eq? (car (car alist)) k)
+        (cdr (car alist))
+        (recur (cdr alist) k (car default)))
+      (car default))))
+
+(def exists?
+  (fn (file) (sh! (str "[ -r " file " ]"))))
+
+(def parent-dir
+  (fn (dir) (car (sh (str "dirname " dir)))))
+
+;;;;;;;;;;;;;;;;;;
+;; Port of lein ;;
+;;;;;;;;;;;;;;;;;;
+
+(def lein-version "2.1.1")
+
+(def snapshot (re-matches? ".*SNAPSHOT$" lein-version))
+
+(def env (map (fn (s) (apply cons (split "=" s))) (sh "env")))
+(println env)
+
+(def delimiter ":")
+
+(def add-path
+  (fn (original-path path)
+    (str original-path delimiter path)))
+
+(if (and (eq? "0" (car (sh "id -u")))
+         (not (get env "LEIN_ROOT")))
+  (do
+    (println "WARNING: You're currently running as root; probably by accident.")
+    (println "Press control-C to abort or Enter to continue as root.")
+    (println "Set LEIN_ROOT to disable this warning.")
+    (sh "read _")))
+
+(def find-project-clj-in-tree
+  (fn (dir)
+    (if (exists? (str dir "/project.clj"))
+      dir
+      (if (eq? dir "/")
+        nil
+        (recur (parent-dir dir))))))
+
+(def project-dir
+  (find-project-clj-in-tree (getenv "PWD")))
+
+(def lein-home
+  (get env "LEIN_HOME" (str (get env "HOME") "/.lein")))
+
+;; TODO: Source leinrcs... Does this even do anything in gherkin?
+;; TODO: Change LEIN_HOME if we're on cygwin
+
+(def lein-jar
+  (str lein-home "/self-installs/leiningen-" lein-version "-standalone.jar"))
+
+;; TODO: normalize $0 on certain BSDs
+;; TODO: resolve symlinks to the script itself portably
+;; TODO: set bin-dir
+;; TODO: Deal wilth :eval-in
+;; TODO: Try to make the default more sane for :eval-in :classloader.lein
+
+(def lein-jvm-opts (get env "LEIN_JVM_OPTS" "-Xms64m -Xmx512m"))
+
+;; TODO: drip support... y'okay!
+;; TODO: Deal with source checkout of lein
+
+(def http-client
+  (get env "HTTP_CLIENT"
+       (if (sh "which curl")
+         (str "curl "
+              (if (get env "https_proxy")
+                (str "-x " (get env "https_proxy") " ")
+                "")
+              "-f -L -o")
+         "wget -O")))
+
+(def java-cmd (get env "JAVA_CMD" "java"))
+(def lein-java-cmd (get env "LEIN_JAVA_CMD" java-cmd))
+
+;; Support $JAVA_OPTS for backwards-compatibility.
+(def jvm-opts (get env "JVM_OPTS"
+                   (get env "JAVA_OPTS")))
+
+(def lein-url (str "https://leiningen.s3.amazonaws.com/downloads/"
+                   "leiningen-" lein-version "-standalone.jar"))
+
+(def print-download-failed
+  (fn (file)
+    (println (str "Failed to download " file))
+    (println "It's possible your HTTP client's certificate store does not have the")
+    (println "correct certificate authority needed. This is often caused by an")
+    (println "out-of-date version of libssl. Either upgrade it or set HTTP_CLIENT")
+    (println "to turn off certificate checks:")
+    (println "  export HTTP_CLIENT='wget --no-check-certificate -O' # or")
+    (println "  export HTTP_CLIENT='curl --insecure -f -L -o'")
+    (println "It's also possible that you're behind a firewall haven't yet")
+    (println "set HTTP_PROXY and HTTPS_PROXY.")))
+
+(def self-install!
+  (fn ()
+    (if (exists? lein-jar)
+      (do
+        (println (str "The self-install jar already exists at " lein-jar "."))
+        (println (str "If you wish to re-download, delete it and rerun self-install."))
+        (exit 1)))
+    (sh! (str "mkdir -p " (parent-dir lein-jar)))
+    (if (sh! (str http-client " "
+                  lein-jar ".pending "
+                  lein-url))
+      (sh (str "mv -f " lein-jar ".pending " lein-jar))
+      (do
+        (sh! (str "rm " lein-jar ".pending 2> /dev/null")) ;;Check this
+        (print-download-failed lein-url)
+        (if snapshot
+          (println "See CONTRIBUTING.md for SNAPSHOT-specific build instructions."))
+        (exit 1)))))
+
+;; TODO: Upgrade
+
+(def upgrade!
+  (fn ()
+    (if (get env "LEIN_DIR")
+      (println "The upgrade task is not meant to be run from a checkout.")
+      (exit 1))
+    (if snapshot
+      (do
+        (println "The upgrade task is only meant for stable releases.")
+        (println "See the 'Hacking' section of the README.")
+        (exit 1)))))
+
+
+(def run!
+  (fn ()
+
+    )
+  )
